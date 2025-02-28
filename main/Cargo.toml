@@ -1,0 +1,28 @@
+[package]
+name = "main"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Core dependencies needed for your p2p node implementation
+libp2p = "0.55"
+tokio = { version = "1", features = ["full", "sync", "time"] }
+uuid = { version = "1.15.1", features = ["serde", "v4"] }
+serde = { version = "1.0.218", features = ["derive"] }
+semver = { version = "1.0.25", features = ["serde"] }
+dashmap = "6.1.0"
+thiserror = "2.0.11"
+
+# Additional libraries you had in your original Cargo.toml
+tokio-tungstenite = "0.26.2"
+tonic = "0.12.3"
+actix-rt = "2.5"
+actix-web = "4.0"
+env_logger = "0.11.6"
+anyhow = "1.0"
+futures = "0.3"
+aes = "0.8.4"
+
+[dev-dependencies]
+# These are useful for the tests we added
+tokio-test = "0.4.0"

@@ -1,0 +1,37 @@
+# Ignore build artifacts
+/target/
+**/*.rs.bk
+
+# Ignore Cargo lock file (for libraries, but you're using a binary, so you might want to keep it)
+# Cargo.lock
+
+# Ignore IDE-specific files
+.vscode/
+.idea/
+
+# Ignore OS-specific files
+.DS_Store
+Thumbs.db
+
+# Ignore debug and release builds
+**/debug/
+**/release/
+
+# Ignore local environment files
+.env
+.env.local
+
+# Ignore Rust cache and incremental compilation files
+**/.rustc/
+**/.cargo/
+
+# Ignore logs and temporary files
+*.log
+*.tmp
+
+# Ignore test artifacts
+/tests/**/*.bin
+/tests/**/*.out
+
+# Ignore any local configuration files
+*.local
