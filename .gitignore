@@ -35,3 +35,5 @@ Thumbs.db
 
 # Ignore any local configuration files
 *.local
+
+notes/

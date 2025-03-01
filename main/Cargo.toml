@@ -5,7 +5,8 @@ edition = "2021"
 
 [dependencies]
 # Core dependencies needed for your p2p node implementation
-libp2p = "0.55"
+libp2p = { version = "0.55", features = ["tcp", "dns", "noise", "mplex", "kad", "identify"] }
+
 tokio = { version = "1", features = ["full", "sync", "time"] }
 uuid = { version = "1.15.1", features = ["serde", "v4"] }
 serde = { version = "1.0.218", features = ["derive"] }

@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 
 
 
-//Types
+//T
 pub type NodeResult<T> = std::result::Result<T, NodeError>;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
