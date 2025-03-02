@@ -6,13 +6,14 @@ use tokio::sync::{mpsc, oneshot};
 use libp2p::{core::transport::Transport as LibP2PTransport, yamux, noise};
 use libp2p::core::{upgrade, identity, transport::MemoryTransport};
 use libp2p::swarm::{SwarmBuilder, SwarmEvent};
+use dashmap::DashMap;
 
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use serde::{Serialize, Deserialize};
 use thiserror::{Error as ThisError};
 
-use std::collection::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::net::{SocketAddr, TcpListener};
 use std::time::Duration;
 use semver::Version;
@@ -24,16 +25,16 @@ use super::node;
 
 /// Handles peer to peer data transfer between nodes
 ///Types
-/// 
-
+pub type TransportResult<T> = Result<T, TransportError>;
 type OneShotSender<T> = oneshot::Sender<TransportResult<T>>;
 
 ///Constants
 
-const CHUNK_SIZE: u64 = 1024 * 64; //64KB per chunk - Maximum Data Chunk Size for Data Sending
+const CHUNK_SIZE: usize = 1024 * 64; //64KB per chunk - Maximum Data Chunk Size for Data Sending
 const MAX_CONCURRENT_CONNECTIONS: u64 = 100;//Maximum Concurrent Connections
 const THREE_TRANSPORT_PROTOCOL_VERSION: &str = "1.0.0";
 const BUFFER_CAPACITY: u64 = 4096;
+const CONNECTION_TIMEOUT: u64 = 30; //Default 30secs
 
 //Error Messages
 const ERR_FAILED_CONNECT_CMD: &str = "Failed to send connect command";
@@ -47,15 +48,15 @@ const ERR_FAILED_CONNECT_RESULT: &str = "Failed to receive connection result";
 pub struct Transport {
     node: Node, 
     config: TransportConfig,
-    command_tx: mspc::Sender<TransportCommand>,
-    command_rx: mspc::Receiver<TransportCommand>,
+    command_tx: mpsc::Sender<TransportCommand>,
+    command_rx: mpsc::Receiver<TransportCommand>,
     connections: DashMap<NodeId, PeerConnection>
 }
 
 impl Transport {
     //Create a Transport Instance
     pub async fn new(node: Node, config: TransportConfig) -> TransportResult<Self> {
-        let (command_tx, comand_rx) = mspc::channel(100);
+        let (command_tx, command_rx) = mpsc::channel(100);
 
         let transport = Self {
             node, 
@@ -79,9 +80,9 @@ impl Transport {
 
 
         //Spawn Transport Layer Command Processor i.e Connect, Disconnect....
-        let command_rx = &mut self.command_rx;
-        let node_as_clone = self.node.clone();
-        let peer_connections = &self.connections;
+        let mut command_rx = &mut self.command_rx;
+        let node_clone = self.node.clone();
+        let peer_connections = self.connections.clone();
         let config = self.config.clone();
 
 
@@ -91,11 +92,11 @@ impl Transport {
             while let Some(command) = command_rx.recv().await {
                 match command {
                     TransportCommand::Connect { addr, response_tx } => {
-                        let res = Self::handle_connect(&node_as_clone, addr, &peer_connections, &config).await;
+                        let res = Self::handle_connect(&node_clone, addr, &peer_connections, &config).await;
                         let _ = response_tx.send(res); //Send the response of request 
                     },
                     TransportCommand::Disconnect { peer_id, response_tx } => {
-                        let res = Self::handle_disconnect(&node_as_clone, peer_id, &peer_connections).await;
+                        let res = Self::handle_disconnect(&node_clone, peer_id, &peer_connections).await;
                         let _ = response_tx.send(res);
                     },
                     TransportCommand::SendMessage { to, data, response_tx } => {
@@ -108,26 +109,26 @@ impl Transport {
 
 
         //Handles the Excepting of Incoming Connections
-        let node_as_clone = self.node.clone();
-        let peer_connections_clone = self.connections.clone();
+        let node_clone = self.node.clone();
+        let connections_clone = self.connections.clone();
 
         tokio::spawn(async move {
             loop {
                 match listener.accept().await {
                     Ok((stream, addr)) => {
                         println!("Receiving Incoming connection from with address of: {}", addr);
-                        let node_clone = node_as_clone.clone();
-                        let peer_connections = peer_connections_clone.clone();
+                        let node_clone_inner = node_clone.clone();
+                        let connections_inner = connections_clone.clone();
 
 
                         tokio::spawn(async move {
-                            if let Err(error) = Self::handle_incoming(node_as_clone, stream, addr, peer_connections).await {
+                            if let Err(error) = Self::handle_incoming(node_clone_inner, stream, addr, connections_inner).await {
                                 eprintln!("Error handling incoming connection: {}", error);
                             }
                         });
                     }
                     Err(error) => {
-                        eprintln!("Error accepting connection: {}", e);
+                        eprintln!("Error accepting connection: {}", error);
                         tokio::time::sleep(Duration::from_secs(1)).await;
                     }
                     
@@ -179,6 +180,70 @@ impl Transport {
         response_rx.await.map.err(|_| TransportError::ChannelError("Failed to receive send result".into()))?
     }
 
+    async fn handle_incoming(node: Node, stream: tokio::net::TcpStream, addr: SocketAddr, connections: DashMap<NodeId, PeerConnection>)
+        -> TransportResult<()> {
+            stream.set_nodelay(true)?; 
+
+            //Temporary Connection is Created here
+            let peer_id = NodeId::new();
+            let mut connection = PeerConnection {
+                peer_id,
+                data_stream: stream,
+                buffer: BytesMut::with_capacity(BUFFER_CAPACITY)
+            };
+
+            // Receive the handshake
+        match connection.receive().await? {
+            TransportMessage::Handshake { node_id, protocol_version } => {
+                // Verify protocol version
+                let our_version = Version::parse(THREE_TRANSPORT_PROTOCOL_VERSION).unwrap();
+                if !protocol_version.major == our_version.major {
+                    // Send error if major version mismatch
+                    connection.send(TransportMessage::Error {
+                        code: 1,
+                        message: format!("Protocol version mismatch: expected {}, got {}", 
+                                        our_version, protocol_version),
+                        timestamp: Utc::now()
+                    }).await?;
+                    return Err(TransportError::VersionMismatch { 
+                        expected: our_version, 
+                        actual: protocol_version 
+                    });
+                }
+                
+                // Update peer ID in connection
+                connection.peer_id = node_id.clone();
+                
+                // Create peer info
+                let peer_info = PeerInfo {
+                    id: node_id.clone(),
+                    address: addr,
+                    protocol_version,
+                    last_seen: std::time::SystemTime::now()
+                };
+                
+                // Add peer to the node
+                node.add_peer(peer_info).await?;
+                
+                // Send handshake acknowledgment
+                connection.send(TransportMessage::HandshakeAck {
+                    node_id: node.id().clone(),
+                    protocol_version: our_version
+                }).await?;
+                
+                // Store the connection
+                connections.insert(node_id, connection);
+                
+                Ok(())
+            },
+            unexpected => {
+                Err(TransportError::UnexpectedMessage {
+                    expected: "Handshake".into(),
+                    actual: format!("{:?}", unexpected)
+                })
+            }
+        }
+        }
 
     //Handle Connection Command 
     async fn handle_connect(
@@ -197,9 +262,8 @@ impl Transport {
 
 
         //Creates a temporary connection before handshake
-
         let mut temp_connection = PeerConnection {
-            peer_id: NodeId::New(),
+            peer_id: NodeId::new(),
             data_stream,
             buffer: BytesMut::with_capacity(BUFFER_CAPACITY)
         };
@@ -241,7 +305,7 @@ impl Transport {
     //Handle Send Message Command
     async fn handle_send_message(to: NodeId, data: Vec<u8>, connections: &DashMap<NodeId, PeerConnection>) -> TransportResult<()> {
         
-        if let Some(mut connection) = connections.get_mut(&to) {
+        if let Some(mut connection_ref) = connections.get_mut(&to) {
             
             //Gwenerate a message ID (as UUID)
             let message_id = Uuid::new_v4();
@@ -257,16 +321,16 @@ impl Transport {
                 let chunk = data[start..end].to_vec(); //Create a Chunk Vec
 
                 //Send chunk data 
-                connection.send(TransportMessage::DataChunk { message_id, 
+                connection_ref.send(TransportMessage::DataChunk { message_id, 
                     chunk_index: i, total_chunks, data:chunk }).await?;
 
 
                 //Except Data Received Acknowledgment
-                match connection.receive().await? {
+                match connection_ref.receive().await? {
                     TransportMessage::DataAck { message_id: ack_id, chunk_index: ack_index} => {
-                        if ack_id != message_id || ack_index != chunk_index as u32 {
+                        if ack_id != message_id || ack_index != i as u32 {
                             return Err(TransportError::UnexpectedMessage {
-                                expected: format!("DataAck for message {} chunk {}", message_id, chunk_index),
+                                expected: format!("DataAck for message {} chunk {}", message_id, i),
                                 actual: format!("DataAck for message {} chunk {}", ack_id, ack_index),
                             });
                         }
@@ -305,7 +369,7 @@ enum TransportCommand {
 
     Connect {
         addr: SocketAddr,
-        response_tx: OneShotSender<()>,
+        response_tx: OneShotSender<NodeId>,
     },
     Disconnect {
         peer_id: NodeId, //Get Node for disconnection by it's ID
@@ -351,8 +415,7 @@ pub enum TransportError {
 }
 
 
-//Types
-pub type TransportResult<T> = Result<T, TransportError>;
+
 
 pub enum TransportMessage {
     //Initial Message 
@@ -410,7 +473,7 @@ impl Default for TransportConfig {
 
         Self {
         bind_address: "0.0.0.0:0".parse().unwrap(), //Port bind address (localhost)
-        connection_timeout: Duration::from_secs(30),
+        connection_timeout: Duration::from_secs(CONNECTION_TIMEOUT),
         chunk_size: CHUNK_SIZE,
         max_concurrent_connections: MAX_CONCURRENT_CONNECTIONS
         }
@@ -427,7 +490,7 @@ pub struct PeerConnection {
 
 impl PeerConnection {
     //Generates a new peer connection
-    async fn new(peer_Id: NodeId, stream: TcpStream) -> Self {
+    async fn new(peer_id: NodeId, stream: TcpStream) -> Self {
         Self {
             peer_id,
             data_stream,
@@ -438,12 +501,12 @@ impl PeerConnection {
     ///Send Peer Message of Data in the Transport Layer (Node to Node)
     async fn send(&mut self, message: TransportMessage) -> TransportResult<()> {
         let encoded = bincode::serialize(&message)?;
-        let encoded_message_length = encoded.len() as u32;
+        let encoded_length = encoded.len() as u32;
 
 
         //Writes Messages as 4-byte prefixed messages
         //DHT logic
-        self.data_stream.write_all(&len.to_be_bytes()).await?;
+        self.data_stream.write_all(&encoded_length.to_be_bytes()).await?;
 
         //Writes the message body
         self.data_stream.write_all(&encoded).await?;
