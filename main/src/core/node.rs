@@ -12,7 +12,8 @@ use tokio::sync::mpsc;
 
 
 
-//T
+
+///Implementation of P2P Node functionality + events
 pub type NodeResult<T> = std::result::Result<T, NodeError>;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq, Serialize, Deserialize)]
@@ -29,6 +30,8 @@ impl Display for NodeId {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         write!(f, "{}", self.0)
     }
+
+    
 }
 
 // Peer Info Struct
