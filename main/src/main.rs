@@ -8,6 +8,6 @@ mod core;
 pub use core::*;
 
 fn main() {
-    let a = 1;
+    let _a = 1;
 
 }

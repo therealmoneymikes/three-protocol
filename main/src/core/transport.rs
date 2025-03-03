@@ -21,7 +21,7 @@ use uuid::Uuid;
 use bincode;
 use chrono::{Utc, DateTime};
 
-use super::node;
+
 
 /// Handles peer to peer data transfer between nodes
 ///Types
@@ -143,7 +143,7 @@ impl Transport {
     //
 
     //Handles Connecting Peer in the P2P network
-    pub async fn connect(&self, addr: SocketAddr) -> TransportResult<NodeId> {
+    pub async fn connect(&self, addr: SocketAddr) -> TransportResult<()> {
 
         //Using oneshot for single producer signal channel interfacing (p2p)
         let (response_tx, response_rx) = oneshot::channel();
@@ -155,6 +155,7 @@ impl Transport {
         //Handle transaction command receiving error
         response_rx.await.map_err(|_| TransportError::ChannelError(ERR_FAILED_CONNECT_RESULT.into()))?;
 
+        Ok(())
     }
 
 
@@ -175,9 +176,11 @@ impl Transport {
         let (response_tx, response_rx) = oneshot::channel();
 
         self.command_tx.send(TransportCommand::SendMessage { to, data, response_tx })
-            .await.map_err(|_| TransprtError::ChannelError("Failed to send message command".into()))?;
+            .await.map_err(|_| TransportError::ChannelError("Failed to send message command".into()))?;
 
-        response_rx.await.map.err(|_| TransportError::ChannelError("Failed to receive send result".into()))?
+        // response_rx.await.map.err(|_| TransportError::ChannelError("Failed to receive send result".into()))?;
+
+        Ok(())
     }
 
     async fn handle_incoming(node: Node, stream: tokio::net::TcpStream, addr: SocketAddr, connections: DashMap<NodeId, PeerConnection>)
@@ -384,7 +387,7 @@ enum TransportCommand {
 }
 
 
-#[derive(Error, Debug)]
+#[derive(ThisError, Debug, std::error::Error)]
 pub enum TransportError {
     #[error("IO error: {0}")]
     IoError(#[from] std::io::Error),

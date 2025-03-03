@@ -97,13 +97,16 @@ pub enum NodeError {
     
     
 }
+
+
+#[derive(Debug, Clone)]
 /// Represent a node in the peer to peer network
 pub struct Node {
-    id: NodeId,
-    state: RwLock<NodeState>, //Handle Node States Enum with Read and Write Lock
-    peers: DashMap<NodeId, PeerInfo>, //Dash Map of key (peerid), value (peerinfo)
-    event_tx: mpsc::Sender<NodeEvent>, //Multi Thread to Single Consumer Event TXs
-    config: NodeConfig, //Node Config (For Admins only)
+    pub id: NodeId,
+    pub state: RwLock<NodeState>, //Handle Node States Enum with Read and Write Lock
+    pub peers: DashMap<NodeId, PeerInfo>, //Dash Map of key (peerid), value (peerinfo)
+    pub event_tx: mpsc::Sender<NodeEvent>, //Multi Thread to Single Consumer Event TXs
+    pub config: NodeConfig, //Node Config (For Admins only)
 }
 
 #[derive(Debug, Clone)]
@@ -261,7 +264,7 @@ impl Node {
 
     //Get the current peers
     //This is a thread-safe read of the peer
-    pub fn get_peers(&self) -> Vec<PeerInfo> {
+    pub async fn get_peers(&self) -> Vec<PeerInfo> {
         self.peers.iter().map(|entry| entry.value().clone()).collect()
     }
 }
