@@ -97,13 +97,17 @@ pub enum NodeError {
     
     
 }
+/// Represent a node in the peer to peer network
+/// 
+/// 
+/// 
 
 
 #[derive(Debug, Clone)]
-/// Represent a node in the peer to peer network
+//UPDATE - Added Atomic Reference Count to allow for thread-safe access to the read-write-lock
 pub struct Node {
     pub id: NodeId,
-    pub state: RwLock<NodeState>, //Handle Node States Enum with Read and Write Lock
+    pub state: Arc<RwLock<NodeState>>, //Handle Node States Enum with Read and Write Lock
     pub peers: DashMap<NodeId, PeerInfo>, //Dash Map of key (peerid), value (peerinfo)
     pub event_tx: mpsc::Sender<NodeEvent>, //Multi Thread to Single Consumer Event TXs
     pub config: NodeConfig, //Node Config (For Admins only)
@@ -138,7 +142,7 @@ impl Node {
     pub async fn with_config(event_tx: mpsc::Sender<NodeEvent>, config: NodeConfig) -> NodeResult<Self> {
         let node = Self {
             id: NodeId::new(),
-            state: RwLock::new(NodeState::Initializing),
+            state: Arc::new(RwLock::new(NodeState::Initializing)), //Added Atomic Counter to logic
             peers: DashMap::new(),
             event_tx,
             config
@@ -154,7 +158,7 @@ impl Node {
  
 
     //Getter function for node ID
-    pub fn id(&self) -> &NodeId {
+    pub async fn id(&self) -> &NodeId {
         &self.id
     }
 
